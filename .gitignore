@@ -175,6 +175,8 @@ cython_debug/
 
 # data files
 *.csv
+*.zip
+*.xlsx
 
 # test files 
 test*.*
