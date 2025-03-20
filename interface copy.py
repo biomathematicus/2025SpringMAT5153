@@ -1,7 +1,9 @@
 from PyQt5.QtWidgets import (QApplication, QWidget, QTextEdit, QLineEdit, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, QComboBox)
 from PyQt5.QtCore import pyqtSignal, Qt
-from PyQt5.QtGui import QFont, QWheelEvent
+
+# GUI class for user-agent interaction
+import json
 
 class CHIMPInterface(QWidget):
     approved_signal = pyqtSignal(str)
@@ -10,19 +12,17 @@ class CHIMPInterface(QWidget):
         super().__init__()
         self.agent = agent
         self.latest_response = ""
+        
         self.initial_request = initial_request
         self.initial_instructions = initial_instructions
-        self.current_font_size = 16  # Initial font size
+        
+        
         
         self.json_file_path = json_file_path
         self.json_data = self.load_json()
         self.setWindowTitle(f"Chat with {self.agent.agent_name}")
         self.setGeometry(100, 100, 600, 400)
-        
         self.init_ui()
-
-        # Install event filter
-        self.text_area.installEventFilter(self)
 
     def load_json(self):
         try:
@@ -41,7 +41,7 @@ class CHIMPInterface(QWidget):
 
     def init_ui(self):
         layout = QVBoxLayout()
-
+        
         # Current agent label
         agent_name_heading = QLabel("Agent:")
         agent_name_heading.setStyleSheet("font-weight: bold; font-size: 16px;")
@@ -62,7 +62,6 @@ class CHIMPInterface(QWidget):
         # Chat display area
         self.text_area = QTextEdit(self)
         self.text_area.setReadOnly(True)
-        self.text_area.setFont(QFont("Arial", self.current_font_size))
         self.text_area.setStyleSheet("""
             QTextEdit {
                 border: 2px solid #cccccc;
@@ -86,11 +85,11 @@ class CHIMPInterface(QWidget):
         """)
         self.user_input.returnPressed.connect(self.on_enter_pressed)
         layout.addWidget(self.user_input)
-
+                
         # QComboBox
         self.dropdown_box = QComboBox()
         layout.addWidget(self.dropdown_box)
-
+        
         # Save and open file buttons
         self.save_button = QPushButton("Save Conversation")
         self.save_button.clicked.connect(self.on_save_button_clicked)
@@ -110,20 +109,6 @@ class CHIMPInterface(QWidget):
         self.text_area.append(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
         self.get_agent_response(self.initial_request)
 
-    def eventFilter(self, source, event):
-        if event.type() == QWheelEvent and source is self.text_area:
-            if event.modifiers() == Qt.ControlModifier:
-                delta = event.angleDelta().y() / 120  # 120 is the standard angle delta step
-                self.change_font_size(delta)
-                return True
-        return super().eventFilter(source, event)
-
-    def change_font_size(self, step):
-        self.current_font_size += step
-        font = self.text_area.font()
-        font.setPointSize(self.current_font_size)
-        self.text_area.setFont(font)
-
     def get_agent_response(self, prompt):
         self.user_input.setEnabled(False)
         response = self.agent.get_response(prompt)
@@ -142,12 +127,23 @@ class CHIMPInterface(QWidget):
             self.text_area.append(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
             self.user_input.clear()
             self.get_agent_response(user_text)
+            
+            
+            # add value to combobox
             self.dropdown_box.addItem(f"{user_text}")
-
+            
+        
+            
+        
     def on_approved_clicked(self):
         self.approved_signal.emit(self.latest_response)
         self.close()
-
+    
+    def copy_latest_answer(self):
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self.latest_response)
+        self.text_area.append("Latest answer copied to clipboard.")
+    
     def on_save_button_clicked(self):
         text = self.text_area.toPlainText()
         if not text:
@@ -165,33 +161,44 @@ class CHIMPInterface(QWidget):
                 QMessageBox.critical(self, 'Error', f'Could not save file: {e}')
     
     def get_current_task_index(self):
+        # search for prompt in tasks
         for i in range(len(self.json_data['TASKS'])):
             if self.json_data['TASKS'][i]['request'] == self.initial_request:
                 return i
+        # return -1 if not found
         return -1
-
+        
+    
     def on_add_to_json_clicked(self):
+        # Get the selected value from the QComboBox
         selected_value = self.dropdown_box.currentText()
         if not selected_value:
             QMessageBox.warning(self, "Warning", "No value selected from the dropdown.")
             return
 
+        # Find the task to update
         task_updated = False
         for task in self.json_data["TASKS"]:
             if task['request'] == self.initial_request:
+                # Update the task's request
                 task['request'] = f"{self.initial_request} \n\n{selected_value}"
                 task_updated = True
                 break
 
         if task_updated:
+            # Save the updated JSON
             self.save_json()
+
+            # Reload the JSON and ensure UI components reflect the changes
             self.json_data = self.load_json()
             self.text_area.append("Task updated and saved to JSON.")
             self.update_ui_after_json_save()
         else:
             QMessageBox.warning(self, "Warning", "Failed to update the task in JSON.")
 
+
     def update_ui_after_json_save(self):
+        """Refresh UI components based on the updated JSON"""
         current_task_index = self.get_current_task_index()
         if current_task_index != -1:
             updated_task = self.json_data["TASKS"][current_task_index]
