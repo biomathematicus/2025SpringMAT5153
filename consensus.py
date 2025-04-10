@@ -117,4 +117,4 @@ def main(file_name):
         app.exec_()
 
 if __name__ == "__main__":
-    main(f"{os.getcwd()}/knowledge_base_transcriptomic.json")    
+    main(f"{os.getcwd()}/2025Spring.json")    

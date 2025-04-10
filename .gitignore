@@ -180,3 +180,6 @@ cython_debug/
 
 # test files 
 test*.*
+
+# Ignore data
+data/

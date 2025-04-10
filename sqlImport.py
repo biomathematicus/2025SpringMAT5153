@@ -4,11 +4,12 @@ import re
 import psycopg2
 
 # === CONFIGURATION ===
+PWD = os.getenv("PostgreSQL_PWD")
 DATA_FOLDER = 'data'  # Folder containing the files
 POSTGRES_CONFIG = {
     'dbname': 'postgres',
     'user': 'postgres',
-    'password': '74584',
+    'password': PWD,
     'host': 'localhost',
     'port': '5432'
 }
