@@ -5,16 +5,21 @@ import psycopg2
 
 # === CONFIGURATION ===
 PWD = os.getenv("PostgreSQL_PWD")
+DBNAME = os.getenv("PostgreSQL_DBNAME")
+USER = os.getenv("PostgreSQL_USER")
+HOST = os.getenv("PostgreSQL_HOST")
+PORT = os.getenv("PostgreSQL_PORT")
+
 # Folders containing the files. Add as many as needed
 DATA_FOLDERS= ['data/2017-18-crdc-data/2017-18 Public-Use Files/Data/LEA/CRDC/CSV',
               'data/2017-18-crdc-data/2017-18 Public-Use Files/Data/SCH/CRDC/CSV',
               'data']
 POSTGRES_CONFIG = {
-    'dbname': 'postgres',
-    'user': 'postgres',
+    'dbname': DBNAME,
+    'user': USER,
     'password': PWD,
-    'host': 'localhost',
-    'port': '5432'
+    'host': HOST,
+    'port': PORT
 }
 
 # === HELPER FUNCTIONS FOR SANITIZATION ===
