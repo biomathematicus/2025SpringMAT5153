@@ -5,7 +5,10 @@ import psycopg2
 
 # === CONFIGURATION ===
 PWD = os.getenv("PostgreSQL_PWD")
-DATA_FOLDER = 'data'  # Folder containing the files
+# Folders containing the files. Add as many as needed
+DATA_FOLDERS= ['data/2017-18-crdc-data/2017-18 Public-Use Files/Data/LEA/CRDC/CSV',
+              'data/2017-18-crdc-data/2017-18 Public-Use Files/Data/SCH/CRDC/CSV',
+              'data']
 POSTGRES_CONFIG = {
     'dbname': 'postgres',
     'user': 'postgres',
@@ -79,7 +82,9 @@ def generate_create_table_sql(header, table_name):
     for i, col in enumerate(header):
         safe_col = sanitize_column_name(col, i)
         cols.append(f'"{safe_col}" TEXT')
-    return f'CREATE TABLE IF NOT EXISTS {table_name} (\n  {",\n  ".join(cols)}\n);'
+    column_definitions = ",\n  ".join(cols)
+    return f'CREATE TABLE IF NOT EXISTS {table_name} (\n  {column_definitions}\n);'
+
 
 # === IMPORT CLEANED CSV TO POSTGRES ===
 def import_csv_to_postgres(clean_path, table_name, config):
@@ -183,43 +188,44 @@ def import_file_as_raw(file_path, config):
 
 # === MAIN WORKFLOW ===
 def main():
-    # Ensure the data folder exists
-    if not os.path.isdir(DATA_FOLDER):
-        print(f"[✗] Folder '{DATA_FOLDER}' not found.")
-        return
+    for DATA_FOLDER in DATA_FOLDERS:
+        # Ensure the data folder exists
+        if not os.path.isdir(DATA_FOLDER):
+            print(f"[✗] Folder '{DATA_FOLDER}' not found.")
+            return
 
-    # 1. Create the table for raw files if it doesn't exist
-    create_raw_files_table(POSTGRES_CONFIG)
+        # 1. Create the table for raw files if it doesn't exist
+        create_raw_files_table(POSTGRES_CONFIG)
 
-    # 2. Process each file in the folder
-    for file_name in os.listdir(DATA_FOLDER):
-        # Full path to file
-        file_path = os.path.join(DATA_FOLDER, file_name)
-        if not os.path.isfile(file_path):
-            # Skip directories or anything that isn't a file
-            continue
+        # 2. Process each file in the folder
+        for file_name in os.listdir(DATA_FOLDER):
+            # Full path to file
+            file_path = os.path.join(DATA_FOLDER, file_name)
+            if not os.path.isfile(file_path):
+                # Skip directories or anything that isn't a file
+                continue
 
-        # Check the file extension
-        ext = os.path.splitext(file_name)[1].lower()
-        
-        if ext == '.csv':
-            # Process CSV with cleaning + specialized import
-            cleaned_csv_path = os.path.join(
-                DATA_FOLDER,
-                f"{os.path.splitext(file_name)[0]}_cleaned.csv"
-            )
-            print(f"\n[→] Detected CSV file: {file_name}")
-            clean_csv(file_path, cleaned_csv_path)
+            # Check the file extension
+            ext = os.path.splitext(file_name)[1].lower()
             
-            # Use the sanitized base name (no extension) as the table name
-            base_name = os.path.splitext(file_name)[0]
-            table_name = sanitize_table_name(base_name)
-            import_csv_to_postgres(cleaned_csv_path, table_name, POSTGRES_CONFIG)
+            if ext == '.csv':
+                # Process CSV with cleaning + specialized import
+                cleaned_csv_path = os.path.join(
+                    DATA_FOLDER,
+                    f"{os.path.splitext(file_name)[0]}_cleaned.csv"
+                )
+                print(f"\n[→] Detected CSV file: {file_name}")
+                clean_csv(file_path, cleaned_csv_path)
+                
+                # Use the sanitized base name (no extension) as the table name
+                base_name = os.path.splitext(file_name)[0]
+                table_name = sanitize_table_name(base_name)
+                import_csv_to_postgres(cleaned_csv_path, table_name, POSTGRES_CONFIG)
 
-        else:
-            # Import all other file types as binary data
-            print(f"\n[→] Detected non-CSV file: {file_name}")
-            import_file_as_raw(file_path, POSTGRES_CONFIG)
+            else:
+                # Import all other file types as binary data
+                print(f"\n[→] Detected non-CSV file: {file_name}")
+                import_file_as_raw(file_path, POSTGRES_CONFIG)
 
 if __name__ == '__main__':
     main()
