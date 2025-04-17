@@ -1,35 +1,26 @@
 import os
 import csv
 import re
+import zipfile
+import shutil
 import psycopg2
+import pandas as pd
 
 # === CONFIGURATION ===
 PWD = os.getenv("PostgreSQL_PWD")
-DBNAME = os.getenv("PostgreSQL_DBNAME")
-USER = os.getenv("PostgreSQL_USER")
-HOST = os.getenv("PostgreSQL_HOST")
-PORT = os.getenv("PostgreSQL_PORT")
-
-# Folders containing the files. Add as many as needed
-DATA_FOLDERS= ['data/2017-18-crdc-data/2017-18 Public-Use Files/Data/LEA/CRDC/CSV',
-              'data/2017-18-crdc-data/2017-18 Public-Use Files/Data/SCH/CRDC/CSV',
-              'data']
+DATA_FOLDER = 'data'                   # Folder containing the zipped files
+EXTRACTED_FOLDER = 'extracted_data'    # Folder where zipped files will be extracted
+CLEANED_FOLDER = 'cleaned_data'        # Folder for cleaned CSVs/XLSX/XLS temporary CSVs
 POSTGRES_CONFIG = {
-    'dbname': DBNAME,
-    'user': USER,
+    'dbname': 'postgres',
+    'user': 'postgres',
     'password': PWD,
-    'host': HOST,
-    'port': PORT
+    'host': 'localhost',
+    'port': '5432'
 }
 
 # === HELPER FUNCTIONS FOR SANITIZATION ===
 def sanitize_column_name(col, index):
-    """
-    Sanitizes a column header by stripping whitespace, replacing spaces/hyphens
-    with underscores, removing non-word characters, and ensuring a non-empty value.
-    If the column is empty, a default name "col_<index>" is assigned.
-    Also prepends 'col_' if the column name starts with a digit.
-    """
     new_col = col.strip().lower().replace(" ", "_").replace("-", "_")
     new_col = re.sub(r'\W+', '', new_col)
     if not new_col:
@@ -39,13 +30,6 @@ def sanitize_column_name(col, index):
     return new_col
 
 def sanitize_table_name(file_basename):
-    """
-    Sanitizes a file basename to create a valid table name:
-    - Lowercases, replaces spaces/hyphens with underscores,
-    - Removes non-word characters,
-    - Assigns a default if empty,
-    - And prepends 't_' if the name starts with a digit.
-    """
     table_name = file_basename.lower().replace(" ", "_").replace("-", "_")
     table_name = re.sub(r'\W+', '', table_name)
     if not table_name:
@@ -54,183 +38,215 @@ def sanitize_table_name(file_basename):
         table_name = "t_" + table_name
     return table_name
 
-# === CLEAN CSV FILE ===
+def table_exists(table_name, config):
+    exists = False
+    try:
+        conn = psycopg2.connect(**config)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_tables "
+            "WHERE schemaname = 'public' AND tablename = %s)",
+            (table_name,)
+        )
+        exists = cur.fetchone()[0]
+    except Exception as e:
+        print(f"[✗] Error checking existence of table `{table_name}`: {e}")
+    finally:
+        if 'cur' in locals(): cur.close()
+        if 'conn' in locals() and conn: conn.close()
+    return exists
+
+def handle_overwrite(table_name, config):
+    if table_exists(table_name, config):
+        ans = input(f"Table `{table_name}` exists. Overwrite? (y/n): ").strip().lower()
+        if ans == 'y':
+            try:
+                conn = psycopg2.connect(**config)
+                cur = conn.cursor()
+                cur.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE;")
+                conn.commit()
+                print(f"[✓] Dropped `{table_name}`.")
+            except Exception as e:
+                print(f"[✗] Error dropping `{table_name}`: {e}")
+                return False
+            finally:
+                if 'cur' in locals(): cur.close()
+                if 'conn' in locals() and conn: conn.close()
+        else:
+            print(f"[!] Skipping `{table_name}`.")
+            return False
+    return True
+
+# === ZIP EXTRACTION ===
+def extract_zip_files(source_folder, destination_folder):
+    os.makedirs(destination_folder, exist_ok=True)
+    # extract all ZIPs under source_folder
+    for root, _, files in os.walk(source_folder):
+        for fname in files:
+            if fname.lower().endswith('.zip'):
+                zip_path = os.path.join(root, fname)
+                try:
+                    with zipfile.ZipFile(zip_path, 'r') as z:
+                        z.extractall(destination_folder)
+                    rel = os.path.relpath(zip_path, source_folder)
+                    print(f"[✓] Extracted ZIP: {rel}")
+                except Exception as e:
+                    print(f"[✗] Error extracting `{zip_path}`: {e}")
+    # copy top‐level non‐zip files
+    for fname in os.listdir(source_folder):
+        path = os.path.join(source_folder, fname)
+        if os.path.isfile(path) and not fname.lower().endswith('.zip'):
+            try:
+                shutil.copy(path, destination_folder)
+                print(f"[✓] Copied file: {fname}")
+            except Exception as e:
+                print(f"[✗] Error copying `{fname}`: {e}")
+    print()
+
+# === CSV CLEANING ===
 def clean_csv(input_path, output_path):
-    """
-    Cleans the CSV by removing empty rows, stripping whitespace,
-    and converting line breaks to spaces.
-    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(input_path, 'r', encoding='cp1252', newline='') as infile, \
          open(output_path, 'w', encoding='utf-8', newline='') as outfile:
         reader = csv.reader(infile)
         writer = csv.writer(outfile)
         for row in reader:
-            if any(cell.strip() for cell in row):  # Skip empty rows
-                cleaned_row = [
-                    cell.strip()
-                        .replace('\r\n', ' ')
-                        .replace('\n', ' ')
-                        .replace('\r', ' ')
-                    for cell in row
-                ]
-                writer.writerow(cleaned_row)
-    print(f"[✓] Cleaned CSV saved as: {output_path}")
+            if any(cell.strip() for cell in row):
+                cleaned = [cell.strip()
+                           .replace('\r\n',' ')
+                           .replace('\n',' ')
+                           .replace('\r',' ')
+                           for cell in row]
+                writer.writerow(cleaned)
+    print(f"[✓] Cleaned CSV: {os.path.relpath(output_path, CLEANED_FOLDER)}")
 
-# === GENERATE SQL SCHEMA FROM HEADER ===
+# === SQL SCHEMA GENERATION ===
 def generate_create_table_sql(header, table_name):
-    """
-    Generates a CREATE TABLE statement for a list of column headers.
-    By default, columns are typed as TEXT for maximum compatibility.
-    Utilizes sanitized column names.
-    """
     cols = []
     for i, col in enumerate(header):
-        safe_col = sanitize_column_name(col, i)
-        cols.append(f'"{safe_col}" TEXT')
-    column_definitions = ",\n  ".join(cols)
-    return f'CREATE TABLE IF NOT EXISTS {table_name} (\n  {column_definitions}\n);'
+        safe = sanitize_column_name(col, i)
+        cols.append(f'"{safe}" TEXT')
+    return f'CREATE TABLE {table_name} (\n  {",\n  ".join(cols)}\n);'
 
-
-# === IMPORT CLEANED CSV TO POSTGRES ===
+# === IMPORT CSV ===
 def import_csv_to_postgres(clean_path, table_name, config):
-    """
-    Creates or verifies a table matching the CSV columns, then imports
-    the CSV data using PostgreSQL's COPY command.
-    """
+    if not handle_overwrite(table_name, config):
+        return
     try:
         with open(clean_path, 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
-            header = next(reader)  # Capture header separately
-
+            header = next(reader)
             create_sql = generate_create_table_sql(header, table_name)
-
             conn = psycopg2.connect(**config)
             cur = conn.cursor()
-
-            # Create the table if it doesn't exist
             cur.execute(create_sql)
             conn.commit()
-            print(f"[✓] Table `{table_name}` created or verified.")
-
-            # Rewind the file pointer for copy_expert
+            print(f"[✓] Created `{table_name}`.")
             f.seek(0)
             cur.copy_expert(
                 f"COPY {table_name} FROM STDIN WITH CSV HEADER ENCODING 'UTF8'",
                 f
             )
             conn.commit()
-            print(f"[✓] Data imported successfully into `{table_name}`.")
+            print(f"[✓] Imported `{table_name}`.\n")
     except Exception as e:
-        print(f"[✗] Error importing {clean_path} into `{table_name}`: {e}")
+        print(f"[✗] Error importing `{table_name}`: {e}\n")
     finally:
-        if 'cur' in locals():
-            cur.close()
-        if 'conn' in locals() and conn:
-            conn.close()
+        if 'cur' in locals(): cur.close()
+        if 'conn' in locals() and conn: conn.close()
 
-# === CREATE TABLE FOR STORING NON-CSV FILES ===
+# === IMPORT XLS/XLSX ===
+def import_excel_to_postgres(file_path, table_name, config):
+    if not handle_overwrite(table_name, config):
+        return
+    try:
+        df = pd.read_excel(file_path)
+        temp_csv = os.path.join(CLEANED_FOLDER, f"{table_name}_converted.csv")
+        os.makedirs(os.path.dirname(temp_csv), exist_ok=True)
+        df.to_csv(temp_csv, index=False)
+        print(f"[✓] Converted Excel to CSV: {os.path.basename(temp_csv)}")
+        import_csv_to_postgres(temp_csv, table_name, config)
+        os.remove(temp_csv)
+    except Exception as e:
+        print(f"[✗] Error importing Excel `{file_path}`: {e}\n")
+
+# === RAW FILES TABLE ===
 def create_raw_files_table(config):
-    """
-    Creates (if needed) the raw_files table, which stores arbitrary files
-    as binary data. This includes xlsx, txt, shp, sbx, dbf, etc.
-    """
-    create_table_sql = """
-        CREATE TABLE IF NOT EXISTS raw_files (
-            id SERIAL PRIMARY KEY,
-            filename TEXT NOT NULL,
-            file_extension TEXT,
-            file_data BYTEA
-        );
+    sql = """
+    CREATE TABLE IF NOT EXISTS raw_files (
+      id SERIAL PRIMARY KEY,
+      filename TEXT NOT NULL,
+      file_extension TEXT,
+      file_data BYTEA
+    );
     """
     try:
         conn = psycopg2.connect(**config)
         cur = conn.cursor()
-        cur.execute(create_table_sql)
+        cur.execute(sql)
         conn.commit()
-        print("[✓] Table `raw_files` created or verified.")
+        print("[✓] raw_files table ready.\n")
     except Exception as e:
-        print(f"[✗] Error creating/verifying raw_files table: {e}")
+        print(f"[✗] Error creating raw_files: {e}\n")
     finally:
-        if 'cur' in locals():
-            cur.close()
-        if 'conn' in locals() and conn:
-            conn.close()
+        if 'cur' in locals(): cur.close()
+        if 'conn' in locals() and conn: conn.close()
 
-# === IMPORT NON-CSV FILE AS BINARY DATA ===
 def import_file_as_raw(file_path, config):
-    """
-    Inserts a single file (any extension except CSV) into the raw_files table
-    as binary data (BYTEA).
-    """
     filename = os.path.basename(file_path)
-    extension = os.path.splitext(filename)[1]  # e.g. ".xlsx", ".txt", etc.
-
-    # Read the file as binary
+    ext = os.path.splitext(filename)[1]
     try:
-        with open(file_path, 'rb') as f:
-            file_data = f.read()
-
+        with open(file_path,'rb') as f:
+            data = f.read()
         conn = psycopg2.connect(**config)
         cur = conn.cursor()
-
-        # Insert the file into raw_files
-        insert_sql = """
-            INSERT INTO raw_files (filename, file_extension, file_data)
-            VALUES (%s, %s, %s);
-        """
-        cur.execute(insert_sql, (filename, extension, psycopg2.Binary(file_data)))
+        cur.execute(
+            "INSERT INTO raw_files (filename,file_extension,file_data) VALUES (%s,%s,%s)",
+            (filename, ext, psycopg2.Binary(data))
+        )
         conn.commit()
-        print(f"[✓] File `{filename}` imported as binary data into `raw_files`.")
-
+        print(f"[✓] Raw imported: {filename}\n")
     except Exception as e:
-        print(f"[✗] Error importing file `{filename}` as raw: {e}")
-
+        print(f"[✗] Error raw `{filename}`: {e}\n")
     finally:
-        if 'cur' in locals():
-            cur.close()
-        if 'conn' in locals() and conn:
-            conn.close()
+        if 'cur' in locals(): cur.close()
+        if 'conn' in locals() and conn: conn.close()
 
 # === MAIN WORKFLOW ===
 def main():
-    for DATA_FOLDER in DATA_FOLDERS:
-        # Ensure the data folder exists
-        if not os.path.isdir(DATA_FOLDER):
-            print(f"[✗] Folder '{DATA_FOLDER}' not found.")
-            return
+    # ensure folders
+    for d in (DATA_FOLDER, EXTRACTED_FOLDER, CLEANED_FOLDER):
+        os.makedirs(d, exist_ok=True)
 
-        # 1. Create the table for raw files if it doesn't exist
-        create_raw_files_table(POSTGRES_CONFIG)
+    # 1) extract
+    extract_zip_files(DATA_FOLDER, EXTRACTED_FOLDER)
 
-        # 2. Process each file in the folder
-        for file_name in os.listdir(DATA_FOLDER):
-            # Full path to file
-            file_path = os.path.join(DATA_FOLDER, file_name)
-            if not os.path.isfile(file_path):
-                # Skip directories or anything that isn't a file
-                continue
+    # 2) ensure raw_files table
+    create_raw_files_table(POSTGRES_CONFIG)
 
-            # Check the file extension
-            ext = os.path.splitext(file_name)[1].lower()
-            
+    # 3) process extracted files
+    for root, _, files in os.walk(EXTRACTED_FOLDER):
+        for fname in files:
+            path = os.path.join(root, fname)
+            rel = os.path.relpath(path, EXTRACTED_FOLDER)
+            ext = os.path.splitext(fname)[1].lower()
+            tbl = sanitize_table_name(os.path.splitext(fname)[0])
+
+            # clear header
+            print("="*60)
+            print(f"Processing: {rel}")
+            print("="*60)
+
             if ext == '.csv':
-                # Process CSV with cleaning + specialized import
-                cleaned_csv_path = os.path.join(
-                    DATA_FOLDER,
-                    f"{os.path.splitext(file_name)[0]}_cleaned.csv"
-                )
-                print(f"\n[→] Detected CSV file: {file_name}")
-                clean_csv(file_path, cleaned_csv_path)
-                
-                # Use the sanitized base name (no extension) as the table name
-                base_name = os.path.splitext(file_name)[0]
-                table_name = sanitize_table_name(base_name)
-                import_csv_to_postgres(cleaned_csv_path, table_name, POSTGRES_CONFIG)
+                cleaned = os.path.join(CLEANED_FOLDER, rel)
+                clean_csv(path, cleaned)
+                import_csv_to_postgres(cleaned, tbl, POSTGRES_CONFIG)
+
+            elif ext in ('.xlsx', '.xls'):
+                import_excel_to_postgres(path, tbl, POSTGRES_CONFIG)
 
             else:
-                # Import all other file types as binary data
-                print(f"\n[→] Detected non-CSV file: {file_name}")
-                import_file_as_raw(file_path, POSTGRES_CONFIG)
+                import_file_as_raw(path, POSTGRES_CONFIG)
 
 if __name__ == '__main__':
     main()
