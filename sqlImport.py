@@ -126,7 +126,9 @@ def generate_create_table_sql(header, table_name):
     for i, col in enumerate(header):
         safe = sanitize_column_name(col, i)
         cols.append(f'"{safe}" TEXT')
-    return f'CREATE TABLE {table_name} (\n  {",\n  ".join(cols)}\n);'
+    # pull the separator string out so no backslashes appear inside {…}
+    sep = ",\n  "
+    return f"CREATE TABLE {table_name} (\n  " + sep.join(cols) + "\n);"
 
 # === IMPORT CSV ===
 def import_csv_to_postgres(clean_path, table_name, config):
