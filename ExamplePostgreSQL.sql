@@ -1,14 +1,12 @@
 -- FUNCTION: MODELING.spGetDailyCaseCount(character varying, bigint, date, date, bigint)
 
--- DROP FUNCTION "MODELING"."spGetDailyCaseCount"(character varying, bigint, date, date, bigint);
+-- DROP FUNCTION "crdc_import"."GetEnrollmentVariables"(varValue character varying, varCount integer);
 
-CREATE OR REPLACE FUNCTION "MODELING"."spGetDailyCaseCount"(
-	slocation character varying,
-	nimportexperimentid bigint,
-	dtdatestart date,
-	dtdateend date,
-	nidvariable bigint)
-    RETURNS TABLE(dtdate date, amvalue double precision) 
+CREATE OR REPLACE FUNCTION "crdc_import"."GetEnrollmentVariables"()
+    RETURNS TABLE(
+		varValue character varying,
+		varCount bigint
+	) 
     LANGUAGE 'plpgsql'
 
     COST 100
@@ -17,40 +15,29 @@ CREATE OR REPLACE FUNCTION "MODELING"."spGetDailyCaseCount"(
     
 AS $BODY$
 /*
-	Procedure : spGetDailyCaseCount 
-	Description: Returns case data for a particular date range. 
+	Function	: funGetClassroomCountsBySchool 
+	Description	: Returns case data for a particular date range. 
 	Input : 	sLocation = Location of interest.
 				nImportExperimentID = The ID of the dataset of interest
 				dtDateStart = Starting date for the range of interest.
 				dtDateEnd = Ending date for the range of interest.			
 	Output : 	Table with number of cases over a particular time span.
-	Author : 	Biomathematics Research Group at UTSA
-				Samuel Roberts, samuel.roberts@utsa.edu
-				Yunus A. Abdussalam, yunus.abdussalam@utsa.edu
-				Juan B Gutierrez, juan.gutierrez3@utsa.edu
-	Change log:	Change log : Modifed the code to handle various input cases for the ID run.
-				Modified the code to reflect changes to Epidata table.
-				Modified code to take nImportExperimentID
-				2020-11-24: Added nIDVariable as input. Changed from temp table to direct query. JBG
-				12/30/2020: Corrected PK-FK relationships to know data import used in ModelRun. JBG
+	Author : 	
+	Change log:	
 	Example :
-				select * from "MODELING"."spGetDailyCaseCount"('45001', 61, '2020-01-01', '2020-08-17',1);
+				select * from "crdc_import"."GetEnrollmentVariables"();
 */
 begin
 
 	return query
-	SELECT dt_value, am_value
-		FROM   	"MODELING"."EpiData" E
-		join 	"MODELING"."ModelRun" M on M.id_run = E.id_run 
-		where  	M.id_import = nImportExperimentID
-				and M.cd_location = sLocation
-				and E.dt_value BETWEEN dtDateStart AND dtDateEnd
-				and E.am_value > 0
-				and E.id_variable = nIDVariable
-	order by 	E.dt_value;
+	select 	cast(tot_enr_m as character varying) as varValue, 
+			count(*) as varCount
+	from 	crdc_import.enrollment 
+	group by tot_enr_m
+	order by tot_enr_m;	
+
 
 end;
 $BODY$;
 
-ALTER FUNCTION "MODELING"."spGetDailyCaseCount"(character varying, bigint, date, date, bigint)
-    OWNER TO postgres;
+-- ALTER FUNCTION "MODELING"."spGetDailyCaseCount"(character varying, bigint, date, date, bigint)    OWNER TO postgres;
