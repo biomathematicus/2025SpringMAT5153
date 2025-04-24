@@ -12,6 +12,10 @@ PWD = os.getenv("PostgreSQL_PWD")
 DATA_FOLDER = 'data'
 EXTRACTED_FOLDER = 'extracted_data'
 CLEANED_FOLDER = 'cleaned_data'
+
+# **NEW**: import into this schema instead of public
+SCHEMA_NAME = 'crdc_import'
+
 POSTGRES_CONFIG = {
     'dbname':   'postgres',
     'user':     'postgres',
@@ -26,12 +30,23 @@ parser.add_argument(
     '--mode',
     choices=['normal', 'overwrite_all', 'import_missing'],
     default='normal',
-    help="normal = prompt each table (default), " #usage python dataVisualization.py --mode overwrite_all
-         "overwrite_all = drop & reimport everything, "
-         "import_missing = only import new tables"
+    help=(
+        "normal = prompt each table (default), "
+        "overwrite_all = drop & reimport everything, "
+        "import_missing = only import new tables"
+    )
 )
 args = parser.parse_args()
 IMPORT_MODE = args.mode
+
+# === SCHEMA SETUP ===
+def ensure_schema(schema, config):
+    sql = f"CREATE SCHEMA IF NOT EXISTS {schema};"
+    with psycopg2.connect(**config) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            conn.commit()
+            print(f"[✓] Schema `{schema}` ready.\n")
 
 # === SANITIZATION HELPERS ===
 def sanitize_column_name(col, index):
@@ -53,14 +68,19 @@ def sanitize_table_name(file_basename):
     return table_name
 
 def table_exists(table_name, config):
+    """Check existence in SCHEMA_NAME instead of public."""
+    sql = """
+      SELECT EXISTS(
+        SELECT 1
+          FROM pg_catalog.pg_tables
+         WHERE schemaname = %s
+           AND tablename = %s
+      );
+    """
     try:
         conn = psycopg2.connect(**config)
         cur = conn.cursor()
-        cur.execute(
-            "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_tables "
-            "WHERE schemaname = 'public' AND tablename = %s)",
-            (table_name,)
-        )
+        cur.execute(sql, (SCHEMA_NAME, table_name))
         return cur.fetchone()[0]
     except Exception as e:
         print(f"[✗] Error checking `{table_name}`: {e}")
@@ -71,20 +91,19 @@ def table_exists(table_name, config):
 
 def handle_overwrite(table_name, config):
     exists = table_exists(table_name, config)
-    # if no table yet, always import
     if not exists:
         return True
 
+    qualified = f"{SCHEMA_NAME}.{table_name}"
     if IMPORT_MODE == 'overwrite_all':
-        # drop quietly
         try:
             conn = psycopg2.connect(**config)
             cur = conn.cursor()
-            cur.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE;")
+            cur.execute(f"DROP TABLE IF EXISTS {qualified} CASCADE;")
             conn.commit()
-            print(f"[✓] (overwrite_all) Dropped `{table_name}`.")
+            print(f"[✓] (overwrite_all) Dropped `{qualified}`.")
         except Exception as e:
-            print(f"[✗] Error dropping `{table_name}`: {e}")
+            print(f"[✗] Error dropping `{qualified}`: {e}")
             return False
         finally:
             if 'cur' in locals(): cur.close()
@@ -92,28 +111,27 @@ def handle_overwrite(table_name, config):
         return True
 
     if IMPORT_MODE == 'import_missing':
-        # skip existing
-        print(f"[!] (import_missing) Skipping existing `{table_name}`.")
+        print(f"[!] (import_missing) Skipping existing `{qualified}`.")
         return False
 
-    # normal mode → prompt
-    ans = input(f"Table `{table_name}` exists. Overwrite? (y/n): ").strip().lower()
+    # normal mode: prompt
+    ans = input(f"Table `{qualified}` exists. Overwrite? (y/n): ").strip().lower()
     if ans == 'y':
         try:
             conn = psycopg2.connect(**config)
             cur = conn.cursor()
-            cur.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE;")
+            cur.execute(f"DROP TABLE IF EXISTS {qualified} CASCADE;")
             conn.commit()
-            print(f"[✓] Dropped `{table_name}`.")
+            print(f"[✓] Dropped `{qualified}`.")
         except Exception as e:
-            print(f"[✗] Error dropping `{table_name}`: {e}")
+            print(f"[✗] Error dropping `{qualified}`: {e}")
             return False
         finally:
             if 'cur' in locals(): cur.close()
             if 'conn' in locals(): conn.close()
         return True
     else:
-        print(f"[!] Skipping `{table_name}`.")
+        print(f"[!] Skipping `{qualified}`.")
         return False
 
 # === ZIP EXTRACTION ===
@@ -149,7 +167,11 @@ def clean_csv(input_path, output_path):
         writer = csv.writer(outfile)
         for row in reader:
             if any(cell.strip() for cell in row):
-                cleaned = [cell.strip().replace('\r\n',' ').replace('\n',' ').replace('\r',' ') for cell in row]
+                cleaned = [cell.strip()
+                           .replace('\r\n',' ')
+                           .replace('\n',' ')
+                           .replace('\r',' ')
+                           for cell in row]
                 writer.writerow(cleaned)
     print(f"[✓] Cleaned CSV: {os.path.relpath(output_path, CLEANED_FOLDER)}")
 
@@ -160,12 +182,14 @@ def generate_create_table_sql(header, table_name):
         safe = sanitize_column_name(col, i)
         cols.append(f'"{safe}" TEXT')
     sep = ",\n  "
-    return f"CREATE TABLE {table_name} (\n  " + sep.join(cols) + "\n);"
+    qualified = f"{SCHEMA_NAME}.{table_name}"
+    return f"CREATE TABLE {qualified} (\n  " + sep.join(cols) + "\n);"
 
 # === IMPORT CSV ===
 def import_csv_to_postgres(clean_path, table_name, config):
     if not handle_overwrite(table_name, config):
         return
+    qualified = f"{SCHEMA_NAME}.{table_name}"
     try:
         with open(clean_path, 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
@@ -175,16 +199,16 @@ def import_csv_to_postgres(clean_path, table_name, config):
             cur = conn.cursor()
             cur.execute(create_sql)
             conn.commit()
-            print(f"[✓] Created `{table_name}`.")
+            print(f"[✓] Created `{qualified}`.")
             f.seek(0)
             cur.copy_expert(
-                f"COPY {table_name} FROM STDIN WITH CSV HEADER ENCODING 'UTF8'",
+                f"COPY {qualified} FROM STDIN WITH CSV HEADER ENCODING 'UTF8'",
                 f
             )
             conn.commit()
-            print(f"[✓] Imported `{table_name}`.\n")
+            print(f"[✓] Imported `{qualified}`.\n")
     except Exception as e:
-        print(f"[✗] Error importing `{table_name}`: {e}\n")
+        print(f"[✗] Error importing `{qualified}`: {e}\n")
     finally:
         if 'cur' in locals(): cur.close()
         if 'conn' in locals(): conn.close()
@@ -206,8 +230,9 @@ def import_excel_to_postgres(file_path, table_name, config):
 
 # === RAW FILES TABLE ===
 def create_raw_files_table(config):
-    sql = """
-    CREATE TABLE IF NOT EXISTS raw_files (
+    qualified = f"{SCHEMA_NAME}.raw_files"
+    sql = f"""
+    CREATE TABLE IF NOT EXISTS {qualified} (
       id SERIAL PRIMARY KEY,
       filename TEXT NOT NULL,
       file_extension TEXT,
@@ -219,14 +244,15 @@ def create_raw_files_table(config):
         cur = conn.cursor()
         cur.execute(sql)
         conn.commit()
-        print("[✓] raw_files table ready.\n")
+        print(f"[✓] `{qualified}` table ready.\n")
     except Exception as e:
-        print(f"[✗] Error creating raw_files: {e}\n")
+        print(f"[✗] Error creating `{qualified}`: {e}\n")
     finally:
         if 'cur' in locals(): cur.close()
         if 'conn' in locals(): conn.close()
 
 def import_file_as_raw(file_path, config):
+    qualified = f"{SCHEMA_NAME}.raw_files"
     filename = os.path.basename(file_path)
     ext = os.path.splitext(filename)[1]
     try:
@@ -235,7 +261,7 @@ def import_file_as_raw(file_path, config):
         conn = psycopg2.connect(**config)
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO raw_files (filename,file_extension,file_data) VALUES (%s,%s,%s)",
+            f"INSERT INTO {qualified} (filename,file_extension,file_data) VALUES (%s,%s,%s)",
             (filename, ext, psycopg2.Binary(data))
         )
         conn.commit()
@@ -248,18 +274,25 @@ def import_file_as_raw(file_path, config):
 
 # === MAIN WORKFLOW ===
 def main():
+    # 0) ensure target schema exists
+    ensure_schema(SCHEMA_NAME, POSTGRES_CONFIG)
+
+    # 1) ensure folders
     for d in (DATA_FOLDER, EXTRACTED_FOLDER, CLEANED_FOLDER):
         os.makedirs(d, exist_ok=True)
 
+    # 2) extract zips
     extract_zip_files(DATA_FOLDER, EXTRACTED_FOLDER)
+    # 3) create raw_files in new schema
     create_raw_files_table(POSTGRES_CONFIG)
 
+    # 4) import each file
     for root, _, files in os.walk(EXTRACTED_FOLDER):
         for fname in files:
             path = os.path.join(root, fname)
-            rel = os.path.relpath(path, EXTRACTED_FOLDER)
-            ext = os.path.splitext(fname)[1].lower()
-            tbl = sanitize_table_name(os.path.splitext(fname)[0])
+            rel  = os.path.relpath(path, EXTRACTED_FOLDER)
+            ext  = os.path.splitext(fname)[1].lower()
+            tbl  = sanitize_table_name(os.path.splitext(fname)[0])
 
             print("\n" + "="*60)
             print(f"Processing: {rel}")
