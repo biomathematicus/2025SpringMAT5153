@@ -5,21 +5,35 @@ import zipfile
 import shutil
 import psycopg2
 import pandas as pd
+import argparse
 
 # === CONFIGURATION ===
 PWD = os.getenv("PostgreSQL_PWD")
-DATA_FOLDER = 'data'                   # Folder containing the zipped files
-EXTRACTED_FOLDER = 'extracted_data'    # Folder where zipped files will be extracted
-CLEANED_FOLDER = 'cleaned_data'        # Folder for cleaned CSVs/XLSX/XLS temporary CSVs
+DATA_FOLDER = 'data'
+EXTRACTED_FOLDER = 'extracted_data'
+CLEANED_FOLDER = 'cleaned_data'
 POSTGRES_CONFIG = {
-    'dbname': 'postgres',
-    'user': 'postgres',
+    'dbname':   'postgres',
+    'user':     'postgres',
     'password': PWD,
-    'host': 'localhost',
-    'port': '5432'
+    'host':     'localhost',
+    'port':     '5432'
 }
 
-# === HELPER FUNCTIONS FOR SANITIZATION ===
+# parse import mode
+parser = argparse.ArgumentParser(description="Import CRDC files to Postgres")
+parser.add_argument(
+    '--mode',
+    choices=['normal', 'overwrite_all', 'import_missing'],
+    default='normal',
+    help="normal = prompt each table (default), " #usage python dataVisualization.py --mode overwrite_all
+         "overwrite_all = drop & reimport everything, "
+         "import_missing = only import new tables"
+)
+args = parser.parse_args()
+IMPORT_MODE = args.mode
+
+# === SANITIZATION HELPERS ===
 def sanitize_column_name(col, index):
     new_col = col.strip().lower().replace(" ", "_").replace("-", "_")
     new_col = re.sub(r'\W+', '', new_col)
@@ -39,7 +53,6 @@ def sanitize_table_name(file_basename):
     return table_name
 
 def table_exists(table_name, config):
-    exists = False
     try:
         conn = psycopg2.connect(**config)
         cur = conn.cursor()
@@ -48,39 +61,64 @@ def table_exists(table_name, config):
             "WHERE schemaname = 'public' AND tablename = %s)",
             (table_name,)
         )
-        exists = cur.fetchone()[0]
+        return cur.fetchone()[0]
     except Exception as e:
-        print(f"[✗] Error checking existence of table `{table_name}`: {e}")
+        print(f"[✗] Error checking `{table_name}`: {e}")
+        return False
     finally:
         if 'cur' in locals(): cur.close()
-        if 'conn' in locals() and conn: conn.close()
-    return exists
+        if 'conn' in locals(): conn.close()
 
 def handle_overwrite(table_name, config):
-    if table_exists(table_name, config):
-        ans = input(f"Table `{table_name}` exists. Overwrite? (y/n): ").strip().lower()
-        if ans == 'y':
-            try:
-                conn = psycopg2.connect(**config)
-                cur = conn.cursor()
-                cur.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE;")
-                conn.commit()
-                print(f"[✓] Dropped `{table_name}`.")
-            except Exception as e:
-                print(f"[✗] Error dropping `{table_name}`: {e}")
-                return False
-            finally:
-                if 'cur' in locals(): cur.close()
-                if 'conn' in locals() and conn: conn.close()
-        else:
-            print(f"[!] Skipping `{table_name}`.")
+    exists = table_exists(table_name, config)
+    # if no table yet, always import
+    if not exists:
+        return True
+
+    if IMPORT_MODE == 'overwrite_all':
+        # drop quietly
+        try:
+            conn = psycopg2.connect(**config)
+            cur = conn.cursor()
+            cur.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE;")
+            conn.commit()
+            print(f"[✓] (overwrite_all) Dropped `{table_name}`.")
+        except Exception as e:
+            print(f"[✗] Error dropping `{table_name}`: {e}")
             return False
-    return True
+        finally:
+            if 'cur' in locals(): cur.close()
+            if 'conn' in locals(): conn.close()
+        return True
+
+    if IMPORT_MODE == 'import_missing':
+        # skip existing
+        print(f"[!] (import_missing) Skipping existing `{table_name}`.")
+        return False
+
+    # normal mode → prompt
+    ans = input(f"Table `{table_name}` exists. Overwrite? (y/n): ").strip().lower()
+    if ans == 'y':
+        try:
+            conn = psycopg2.connect(**config)
+            cur = conn.cursor()
+            cur.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE;")
+            conn.commit()
+            print(f"[✓] Dropped `{table_name}`.")
+        except Exception as e:
+            print(f"[✗] Error dropping `{table_name}`: {e}")
+            return False
+        finally:
+            if 'cur' in locals(): cur.close()
+            if 'conn' in locals(): conn.close()
+        return True
+    else:
+        print(f"[!] Skipping `{table_name}`.")
+        return False
 
 # === ZIP EXTRACTION ===
 def extract_zip_files(source_folder, destination_folder):
     os.makedirs(destination_folder, exist_ok=True)
-    # extract all ZIPs under source_folder
     for root, _, files in os.walk(source_folder):
         for fname in files:
             if fname.lower().endswith('.zip'):
@@ -92,7 +130,6 @@ def extract_zip_files(source_folder, destination_folder):
                     print(f"[✓] Extracted ZIP: {rel}")
                 except Exception as e:
                     print(f"[✗] Error extracting `{zip_path}`: {e}")
-    # copy top‐level non‐zip files
     for fname in os.listdir(source_folder):
         path = os.path.join(source_folder, fname)
         if os.path.isfile(path) and not fname.lower().endswith('.zip'):
@@ -112,11 +149,7 @@ def clean_csv(input_path, output_path):
         writer = csv.writer(outfile)
         for row in reader:
             if any(cell.strip() for cell in row):
-                cleaned = [cell.strip()
-                           .replace('\r\n',' ')
-                           .replace('\n',' ')
-                           .replace('\r',' ')
-                           for cell in row]
+                cleaned = [cell.strip().replace('\r\n',' ').replace('\n',' ').replace('\r',' ') for cell in row]
                 writer.writerow(cleaned)
     print(f"[✓] Cleaned CSV: {os.path.relpath(output_path, CLEANED_FOLDER)}")
 
@@ -126,7 +159,6 @@ def generate_create_table_sql(header, table_name):
     for i, col in enumerate(header):
         safe = sanitize_column_name(col, i)
         cols.append(f'"{safe}" TEXT')
-    # pull the separator string out so no backslashes appear inside {…}
     sep = ",\n  "
     return f"CREATE TABLE {table_name} (\n  " + sep.join(cols) + "\n);"
 
@@ -155,9 +187,9 @@ def import_csv_to_postgres(clean_path, table_name, config):
         print(f"[✗] Error importing `{table_name}`: {e}\n")
     finally:
         if 'cur' in locals(): cur.close()
-        if 'conn' in locals() and conn: conn.close()
+        if 'conn' in locals(): conn.close()
 
-# === IMPORT XLS/XLSX ===
+# === IMPORT EXCEL ===
 def import_excel_to_postgres(file_path, table_name, config):
     if not handle_overwrite(table_name, config):
         return
@@ -192,7 +224,7 @@ def create_raw_files_table(config):
         print(f"[✗] Error creating raw_files: {e}\n")
     finally:
         if 'cur' in locals(): cur.close()
-        if 'conn' in locals() and conn: conn.close()
+        if 'conn' in locals(): conn.close()
 
 def import_file_as_raw(file_path, config):
     filename = os.path.basename(file_path)
@@ -212,21 +244,16 @@ def import_file_as_raw(file_path, config):
         print(f"[✗] Error raw `{filename}`: {e}\n")
     finally:
         if 'cur' in locals(): cur.close()
-        if 'conn' in locals() and conn: conn.close()
+        if 'conn' in locals(): conn.close()
 
 # === MAIN WORKFLOW ===
 def main():
-    # ensure folders
     for d in (DATA_FOLDER, EXTRACTED_FOLDER, CLEANED_FOLDER):
         os.makedirs(d, exist_ok=True)
 
-    # 1) extract
     extract_zip_files(DATA_FOLDER, EXTRACTED_FOLDER)
-
-    # 2) ensure raw_files table
     create_raw_files_table(POSTGRES_CONFIG)
 
-    # 3) process extracted files
     for root, _, files in os.walk(EXTRACTED_FOLDER):
         for fname in files:
             path = os.path.join(root, fname)
@@ -234,8 +261,7 @@ def main():
             ext = os.path.splitext(fname)[1].lower()
             tbl = sanitize_table_name(os.path.splitext(fname)[0])
 
-            # clear header
-            print("="*60)
+            print("\n" + "="*60)
             print(f"Processing: {rel}")
             print("="*60)
 
