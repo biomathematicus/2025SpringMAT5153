@@ -1,0 +1,81 @@
+Interesting Queries and Notes   by Oscar Mallen and OscarGPT
+
+1.) Run this Query (), and you will see many null values on county_fip because of 
+missing IDs in the geocode table
+
+All certified LEA matched with geocode data:
+---------------------------------------
+SELECT
+  lc.LEA_STATE   AS state_code,      -- e.g. “AL”
+  lc.LEA_NAME    AS school_district, -- district name
+  lc.LEAID       AS lea_id,          -- unique LEA identifier
+  lc.LEA_CITY    AS city,            -- city from LEA characteristics
+  lc.LEA_ZIP     AS zip_code,        -- ZIP code from LEA characteristics
+  geo.nmcnty     AS county,          -- county name from geo table
+  geo.cnty       AS county_fip       -- county FIPS from geo table
+FROM
+  crdc_import.lea_characteristics lc
+LEFT JOIN
+  crdc_import.edge_geocode_publiclea_1718 geo
+    ON lc.LEAID = geo.LEAID
+;
+--------------------------------------
+
+run this query next and you will see a huge discrepancy
+--------------------------------------------------
+SELECT 
+  COUNT(*) AS total_leas,
+  COUNT(geo.LEAID) AS matched_leas
+FROM crdc_import.lea_characteristics lc
+LEFT JOIN crdc_import.edge_geocode_publiclea_1718 geo
+  ON lc.LEAID = geo.LEAID;
+--------------------------------------------------
+
+Out of the 17604 LEA_IDs only 14214 matched...
+This is extremely odd because the CRDC Technical Doc states there is ->
+17637 LEA, 17604 of which are certified. So where are the leaIDs of ->
+the remaining 3390 ?
+
+districts that did not match their geocode data
+----------------------------------------------------------
+SELECT
+  lc.LEA_STATE   AS state_code,
+  lc.LEA_NAME    AS school_district,
+  lc.LEAID       AS lea_id,
+  lc.LEA_CITY    AS city,
+  lc.LEA_ZIP     AS zip_code
+FROM
+  crdc_import.lea_characteristics lc
+LEFT JOIN
+  crdc_import.edge_geocode_publiclea_1718 geo
+  ON lc.LEAID = geo.LEAID
+WHERE
+  geo.LEAID IS NULL;
+----------------------------------------------------------
+The query shows exactly 3390 queries many of which have leading 0s 
+
+exactly 17604 :
+---------------------------------------------------------------
+SELECT
+  lc.LEA_STATE   AS state_code,
+  lc.LEA_NAME    AS school_district,
+  lc.LEAID       AS lea_id,
+  lc.LEA_CITY    AS city,
+  lc.LEA_ZIP     AS zip_code,
+  geo.nmcnty     AS county,
+  geo.cnty       AS county_fip
+FROM
+  crdc_import.lea_characteristics lc
+LEFT JOIN
+  crdc_import.edge_geocode_publiclea_1718 geo
+    ON ltrim(lc.LEAID, '0') = geo.leaid::TEXT;
+
+---------------------------------------------------------------
+This lets us accurately refernce the total number of local learning 
+authorities easily by matching to the LeaID with relevant info
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+
+2.) Match poverty data 
