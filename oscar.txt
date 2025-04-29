@@ -78,4 +78,104 @@ authorities easily by matching to the LeaID with relevant info
 ////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////
 
-2.) Match poverty data 
+2.) Match each county to its poverty data using usdd17 and calcualte a ratio for poverty in the group of (5-17) yrs
+-------------------------------------------------------------------
+WITH ussd_agg AS (
+  SELECT
+    "unnamed_2"                               AS district_id,
+    SUM("unnamed_4"::BIGINT)                  AS est_population,
+    SUM("unnamed_5"::BIGINT)                  AS pop_5_17,
+    SUM("unnamed_6"::BIGINT)                  AS pop_5_17_in_poverty
+  FROM crdc_import.ussd17
+  WHERE "unnamed_2" ~ '^\d{5}$'               -- only real 5-digit codes
+  GROUP BY "unnamed_2"
+)
+SELECT
+  lcl.state_code,
+  lcl.county,
+  lcl.county_fip,
+  SUM(ua.est_population)               AS total_population,
+  SUM(ua.pop_5_17)                     AS total_pop_5_17,
+  SUM(ua.pop_5_17_in_poverty)          AS total_pov_5_17,
+  ROUND(
+    SUM(ua.pop_5_17_in_poverty)::NUMERIC
+    / NULLIF(SUM(ua.pop_5_17), 0)
+    * 100
+  ,2)                                   AS pct_poverty_5_17
+FROM
+  crdc_import."GetLeaCountyLookup"() AS lcl
+  JOIN ussd_agg AS ua
+    ON substring(lcl.lea_id FROM 3 FOR 5) = ua.district_id
+GROUP BY
+  lcl.state_code,
+  lcl.county,
+  lcl.county_fip
+ORDER BY
+  pct_poverty_5_17 DESC
+;
+-------------------------------------------------------------------
+This gets us 3128 Rows which is one number short of the distinct counties
+in get county by GetLeaCountyLookup(). If we switch to a left join we will include
+counties that dont have poverty data 
+--------------------------------------------------------------------
+WITH ussd_clean AS (
+  -- 1) strip out header rows and cast your four key columns
+  SELECT
+    "unnamed_2"       AS district_id,
+    "unnamed_4"::BIGINT AS est_population,
+    "unnamed_5"::BIGINT AS pop_5_17,
+    "unnamed_6"::BIGINT AS pop_5_17_in_poverty
+  FROM crdc_import.ussd17
+  WHERE "unnamed_2" ~ '^\d{5}$'
+),
+district_to_county AS (
+  -- 2) build a small lookup of district → county
+  SELECT
+    substring(lea_id FROM 3 FOR 5) AS district_id,
+    county,
+    county_fip
+  FROM crdc_import."GetLeaCountyLookup"()
+  WHERE county IS NOT NULL
+),
+ussd_by_county AS (
+  -- 3) left-join so even counties with no poverty rows still appear
+  SELECT
+    dtc.county,
+    dtc.county_fip,
+    uc.est_population,
+    uc.pop_5_17,
+    uc.pop_5_17_in_poverty
+  FROM district_to_county dtc
+  LEFT JOIN ussd_clean uc
+    ON uc.district_id = dtc.district_id
+)
+-- 4) aggregate up to one row per county, filling missing sums with 0
+SELECT
+  county,
+  county_fip,
+  COALESCE(SUM(est_population),    0) AS total_population,
+  COALESCE(SUM(pop_5_17),          0) AS total_pop_5_17,
+  COALESCE(SUM(pop_5_17_in_poverty),0) AS total_pov_5_17,
+  ROUND(
+    COALESCE(SUM(pop_5_17_in_poverty),0)::NUMERIC
+    / NULLIF(COALESCE(SUM(pop_5_17),0),0)
+    * 100
+  ,2)                                 AS pct_poverty_5_17
+FROM ussd_by_county
+GROUP BY
+  county,
+  county_fip
+ORDER BY
+  pct_poverty_5_17 DESC
+;
+--------------------------------------------------------------------
+returns 3129 row, with richmond county missing poverty data 
+
+
+
+
+
+
+
+
+
