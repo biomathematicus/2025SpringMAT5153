@@ -1,3 +1,35 @@
+# Data Sources:
+* School district maps:
+https://nces.ed.gov/programs/edge/Geographic/DistrictBoundaries
+Download 17-18 shapefiles. Downlaod  Single Composite File (184 MB):
+https://nces.ed.gov/programs/edge/data/EDGE_SCHOOLDISTRICT_TL18_SY1718.zip 
+* Opportunity Atlas, mobility outcomes, all ages, all ethnicities, all genders, counties. 
+https://www.opportunityatlas.org/
+Name this file "OpportunityAtlas.csv" so that the table in PostgreSQL is called OpportunityAtlas
+* Census tracts shapefiles from "2022 Cartographic Boundary File (SHP), Current Census Tract for United States, 1:500,000 "
+https://catalog.data.gov/dataset/2022-cartographic-boundary-file-shp-current-census-tract-for-united-states-1-500000
+file 
+https://www2.census.gov/geo/tiger/GENZ2022/shp/cb_2022_us_tract_500k.zip
+* FIND POPULATION BY CENSus TRACT FOR YEAR 2018
+
+# Data location: 
+Put downloaded files in the folder data.
+
+# Analysis
+## Distribution of population in census tracts onto school districts
+
+Pseudocode: 
+nD = number of school districts from table OpportunityAtlas
+for i = 1:nD:
+  CensusTracts = collection of census tracts within 50 miles of the center of the school district
+  for censusTratcs in CensusTracts:
+    areaInCensusTract = find the intersection between school district and census tract. Subtract are in water.
+    areaNotInCensusTract = find the area of the tract not in school district. Subtract are in water.
+    if areaInCensusTract > 0:
+      population of censu tract assigned to school district  = (1 - areaNotInCensusTract / areaInCensusTract) * population of census tract
+  
+
+
 Interesting Queries and Notes   by Oscar Mallen and OscarGPT
 
 1.) Run this Query (), and you will see many null values on county_fip because of 
