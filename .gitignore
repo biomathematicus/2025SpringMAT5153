@@ -184,3 +184,4 @@ test*.*
 # Ignore data
 data/
 backup/
+extracted_data/

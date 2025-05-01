@@ -16,7 +16,7 @@ https://www2.census.gov/geo/tiger/GENZ2022/shp/cb_2022_us_tract_500k.zip
 Put downloaded files in the folder data.
 
 # Analysis
-## Distribution of population in census tracts onto school districts
+## Distribution of population in census tracts onto school districts 
 
 Pseudocode: 
 nD = number of school districts from table OpportunityAtlas
