@@ -14,7 +14,7 @@ POSTGRES_CONFIG = {
     'port': '5432'
 }
 # fetch data from "enrollment" table and cast strings to integer to utilizethe sum func
-def fetch_enrollment_totals():
+def getColumnStats():
     """Returns (total_males, total_females, total_students) from the enrollment table."""
     conn = psycopg2.connect(**POSTGRES_CONFIG)
     try:
@@ -35,7 +35,7 @@ def fetch_enrollment_totals():
 
 if __name__ == '__main__':
     #males, females, total = fetch_enrollment_totals()
-    rows = fetch_enrollment_totals()
+    rows = getColumnStats()
     #print(f"Total male students:   {males}")
     #print(f"Total female students: {females}")
     #print(f"Overall total:         {total}")
@@ -54,4 +54,29 @@ if __name__ == '__main__':
     plt.ylabel('Frequency')
 
     # Displaying the plot
-    plt.show()    
+    plt.show()   
+    
+    """     
+    Pseudocode for data exploration
+    
+    create a file called exploration.tex 
+    
+    tables = oDB.funGetTablaNames()
+    for table in tables:
+        columns = oDB.funGetColumnsInTable(table.name)
+        for column in columns:
+            getColumnStats(table, column)
+            append to file exploration.tex the latex code for the PNG inclusion
+    call pdflatex with the name of the master TeX file called report.tex
+    
+    
+    The TeX file report.tex should look liket this:
+    \documentclass{article}
+    \title{Data Exploration}
+    \author{you}
+    \begin{document}
+    \maketitle
+    \input{exploration.tex}
+    \end{document}    
+    
+    """
